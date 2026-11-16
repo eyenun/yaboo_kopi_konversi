@@ -5,17 +5,16 @@ import numpy as np
 import pandas as pd
 
 
-def generate_yaboo_pos_dataset(num_rows: int = 1200, seed: int = 42) -> pd.DataFrame:
+def generate_yaboo_pos_dataset(total_days: int = 135, seed: int = 42) -> pd.DataFrame:
     """
-    Generator dataset sintetis transaksi POS Santai Scale untuk UMKM Yaboo Kopi.
-    Menghasilkan 1.200+ baris transaksi realistis (pola lonjakan akhir pekan,
-    konversi resep bahan baku utama, serta simulasi kolom PII untuk pengujian audit).
+    Generator dataset sintetis transaksi POS UMKM Yaboo Kopi.
+    Memuat tanggal, jam operasional, varian menu kopi/non-kopi, qty, harga,
+    serta konversi Bill of Materials (gram kopi, ml susu UHT, ml gula aren).
     """
     np.random.seed(seed)
     random.seed(seed)
 
     start_date = datetime(2026, 7, 1)
-    total_days = 135  # ~4.5 bulan data historis hingga pertengahan November 2026
 
     menu_catalog = [
         {"menu": "Es Kopi Susu Yaboo", "harga": 18000, "kopi_gr": 18, "susu_ml": 120, "sirup_ml": 20, "weight": 0.35},
@@ -26,20 +25,28 @@ def generate_yaboo_pos_dataset(num_rows: int = 1200, seed: int = 42) -> pd.DataF
     ]
     menu_weights = [item["weight"] for item in menu_catalog]
     payment_methods = ["QRIS", "Tunai", "Transfer"]
-
-    # Simulasi kolom PII pelanggan untuk pengujian sanitasi Audit Sistem Informasi
     sample_names = ["Rizky", "Aulia", "Fajar", "Nadia", "Bima", "Siti", "Dimas", None, None]
+
+    # Jam sibuk kedai kopi (pagi 08-10 dan sore-malam 16-21 lebih sering muncul)
+    operating_hours = list(range(8, 23))
+    hour_weights = [0.06, 0.07, 0.05, 0.04, 0.05, 0.06, 0.05, 0.06, 0.09, 0.10, 0.10, 0.10, 0.09, 0.05, 0.03]
 
     records = []
     trx_counter = 10001
 
     for day_offset in range(total_days):
         current_date = start_date + timedelta(days=day_offset)
-        is_weekend = current_date.weekday() >= 4  # Jumat, Sabtu, Minggu lebih ramai
-
+        is_weekend = current_date.weekday() >= 4
         daily_trx_count = random.randint(10, 14) if is_weekend else random.randint(6, 10)
 
-        for _ in range(daily_trx_count):
+        # Bangkitkan jam transaksi terurut dalam satu hari
+        hours_today = sorted(random.choices(operating_hours, weights=hour_weights, k=daily_trx_count))
+
+        for hour in hours_today:
+            minute = random.randint(0, 59)
+            second = random.randint(0, 59)
+            jam_str = f"{hour:02d}:{minute:02d}:{second:02d}"
+
             item = random.choices(menu_catalog, weights=menu_weights, k=1)[0]
             qty = random.choices([1, 2, 3, 4], weights=[0.55, 0.28, 0.12, 0.05])[0]
             if is_weekend and random.random() < 0.3:
@@ -51,6 +58,7 @@ def generate_yaboo_pos_dataset(num_rows: int = 1200, seed: int = 42) -> pd.DataF
             records.append({
                 "transaction_id": f"TRX-{trx_counter}",
                 "tanggal": current_date.strftime("%Y-%m-%d"),
+                "jam": jam_str,
                 "nama_pelanggan": cust_name,
                 "no_hp_pelanggan": cust_phone,
                 "nama_produk": item["menu"],
@@ -71,12 +79,9 @@ if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
     output_csv = os.path.join(base_dir, "synthetic_pos_yaboo_1200.csv")
 
-    df_hasil = generate_yaboo_pos_dataset(num_rows=1200)
+    df_hasil = generate_yaboo_pos_dataset(total_days=135)
     df_hasil.to_csv(output_csv, index=False)
 
-    print("=== GENERATOR DATASET SINTETIS YABOO KOPI SELESAI ===")
-    print(f"Lokasi Berkas : {output_csv}")
-    print(f"Total Baris   : {len(df_hasil)} baris transaksi (>= 1.000 baris terpenuhi)")
-    print(f"Rentang Waktu : {df_hasil['tanggal'].min()} s/d {df_hasil['tanggal'].max()}")
-    print("\nContoh 5 baris pertama:")
-    print(df_hasil[["transaction_id", "tanggal", "nama_produk", "qty", "total_transaksi"]].head())
+    print("=== GENERATOR DATASET SINTETIS YABOO KOPI (+ KOLOM JAM) SELESAI ===")
+    print(f"Total Baris   : {len(df_hasil)} baris transaksi")
+    print(df_hasil[["transaction_id", "tanggal", "jam", "nama_produk", "qty", "total_transaksi"]].head())
