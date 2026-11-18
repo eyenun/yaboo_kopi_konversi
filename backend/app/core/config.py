@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "Yaboo Kopi AI Cashflow & Inventory API"
     APP_ENV: str = "development"
     GEMINI_API_KEY: str = "BELUM_DIISI"
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
