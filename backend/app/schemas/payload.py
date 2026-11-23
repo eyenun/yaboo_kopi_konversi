@@ -1,5 +1,5 @@
-﻿from pydantic import BaseModel
-from typing import List
+﻿from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
 
 
 class DailySalesPoint(BaseModel):
@@ -33,3 +33,24 @@ class AnalysisResponse(BaseModel):
     tren_penjualan: List[DailySalesPoint]
     prediksi_kebutuhan_bahan: List[StockForecastItem]
     rekomendasi_ai: AIAdviceOutput
+    skor_kualitas_data: Optional[float] = None
+    catatan_audit_pii: Optional[str] = None
+
+class ChatAdvisorRequest(BaseModel):
+  pertanyaan: str = Field(
+      ...,
+      min_length=3,
+      description=(
+          "Pertanyaan pemilik kedai terkait stok, modal belanja, atau arus kas"
+      ),
+  )
+  konteks_analisis: Optional[Dict[str, Any]] = Field(
+      default=None,
+      description="Hasil JSON analisis POS terakhir sebagai konteks jawaban AI",
+  )
+
+
+class ChatAdvisorResponse(BaseModel):
+  status: str
+  mode_sumber: str
+  jawaban: str
