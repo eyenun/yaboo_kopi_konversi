@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
@@ -21,8 +21,27 @@ class YabooPOSPreprocessor:
         "alamat", "address", "email", "kasir"
     ]
 
+    # Pemetaan alias header kolom POS asli Yaboo Kopi -> skema standar internal
+    COLUMN_ALIASES: Dict[str, str] = {
+        "no._pesanan": "transaction_id",
+        "no_pesanan": "transaction_id",
+        "no_struk": "transaction_id",
+        "tgl": "tanggal",
+        "date": "tanggal",
+        "produk": "nama_produk",
+        "menu": "nama_produk",
+        "item": "nama_produk",
+        "jumlah": "qty",
+        "quantity": "qty",
+        "harga_jual": "harga_satuan",
+        "harga": "harga_satuan",
+        "total_gross": "total_transaksi",
+        "total": "total_transaksi",
+        "subtotal": "total_transaksi",
+    }
+
     # Resep Asli per Porsi/Cup berdasarkan sheet 'Resep_Bahan_Baku' Yaboo Kopi
-    YABOO_BOM_RECIPES: Dict[str, Dict[str, float]] = {
+    RECIPE_KEYWORDS: Dict[str, Dict[str, float]] = {
         "americano": {"kopi_gr": 9, "susu_ml": 0, "krimer_gr": 0, "powder_aren_gr": 0, "sirup_ml": 0, "skm_gr": 0},
         "apple americano": {"kopi_gr": 9, "susu_ml": 0, "krimer_gr": 0, "powder_aren_gr": 0, "sirup_ml": 20, "skm_gr": 0},
         "aren": {"kopi_gr": 8, "susu_ml": 80, "krimer_gr": 12, "powder_aren_gr": 15, "sirup_ml": 5, "skm_gr": 0},
@@ -38,6 +57,9 @@ class YabooPOSPreprocessor:
         "vanilla": {"kopi_gr": 0, "susu_ml": 0, "krimer_gr": 0, "powder_aren_gr": 0, "sirup_ml": 0, "skm_gr": 10},
     }
 
+    # Alias backward-compatible
+    YABOO_BOM_RECIPES = RECIPE_KEYWORDS
+
     def __init__(self, min_quality_score: float = 85.0):
         self.min_quality_score = min_quality_score
 
@@ -47,29 +69,11 @@ class YabooPOSPreprocessor:
             return pd.read_excel(filepath, sheet_name=0)
         return pd.read_csv(filepath)
 
-    @staticmethod
-    def _normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    @classmethod
+    def _normalize_column_names(cls, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-        alias_map = {
-            "no._pesanan": "transaction_id",
-            "no_pesanan": "transaction_id",
-            "no_struk": "transaction_id",
-            "tgl": "tanggal",
-            "date": "tanggal",
-            "produk": "nama_produk",
-            "menu": "nama_produk",
-            "item": "nama_produk",
-            "jumlah": "qty",
-            "quantity": "qty",
-            "harga_jual": "harga_satuan",
-            "harga": "harga_satuan",
-            "total_gross": "total_transaksi",
-            "total": "total_transaksi",
-            "subtotal": "total_transaksi",
-        }
-        return df.rename(columns={k: v for k, v in alias_map.items() if k in df.columns})
+        return df.rename(columns={k: v for k, v in cls.COLUMN_ALIASES.items() if k in df.columns})
 
     @staticmethod
     def _parse_currency(val) -> float:
@@ -82,7 +86,7 @@ class YabooPOSPreprocessor:
 
     def _map_bom_per_unit(self, product_name: str) -> pd.Series:
         name = str(product_name).strip().lower()
-        recipe = self.YABOO_BOM_RECIPES.get(
+        recipe = self.RECIPE_KEYWORDS.get(
             name,
             {"kopi_gr": 9, "susu_ml": 80, "krimer_gr": 8, "powder_aren_gr": 0, "sirup_ml": 0, "skm_gr": 0},
         )
@@ -100,17 +104,14 @@ class YabooPOSPreprocessor:
         if missing_cols:
             raise DataQualityError(f"Kolom wajib tidak ditemukan di file POS: {missing_cols}")
 
-        # 1. Sanitasi PII (Hapus identitas pelanggan & kasir)
         dropped_pii = [col for col in self.PII_COLUMNS if col in df.columns]
         df = df.drop(columns=dropped_pii, errors="ignore")
 
-        # 2. Hapus duplikat berdasarkan No. Pesanan + Produk + Qty
         subset_dup = [c for c in ["transaction_id", "tanggal", "nama_produk", "qty"] if c in df.columns]
         before_dedup = len(df)
         df = df.drop_duplicates(subset=subset_dup).copy()
         duplicate_rows_removed = before_dedup - len(df)
 
-        # 3. Parsing tanggal, qty, harga, dan HPP/laba
         df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
         df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
         df["nama_produk"] = df["nama_produk"].astype(str).str.strip()
@@ -136,7 +137,6 @@ class YabooPOSPreprocessor:
         else:
             df["laba_bersih"] = df["total_transaksi"] - df["total_hpp"]
 
-        # 4. Filter baris anomali
         valid_mask = (
             df["tanggal"].notna()
             & (df["qty"] > 0)
@@ -155,12 +155,10 @@ class YabooPOSPreprocessor:
                 f"Quality Gate GAGAL! Skor kualitas data {quality_score}% berada di bawah batas minimum {self.min_quality_score}%."
             )
 
-        # 5. Konversi Bill of Materials (BOM) Asli Yaboo Kopi
         bom_unit = df["nama_produk"].apply(self._map_bom_per_unit)
         for col in bom_unit.columns:
             df[f"pakai_{col}"] = df["qty"] * bom_unit[col]
 
-        # Normalisasi satuan cup (Seliter Aren = 8 porsi Aren)
         df["cup_ekuivalen"] = np.where(df["nama_produk"] == "Seliter Aren", df["qty"] * 8, df["qty"])
 
         report = {
@@ -179,9 +177,6 @@ class YabooPOSPreprocessor:
 
     def build_daily_ml_features(self, clean_df: pd.DataFrame) -> pd.DataFrame:
         df = clean_df.copy()
-        df["tanggal_str"] = df["tanggal"].dt.strftime("%Y-%m-%d")
-
-        # Lengkapi seluruh tanggal kalender agar deret waktu kontinyu
         full_dates = pd.date_range(df["tanggal"].min(), df["tanggal"].max(), freq="D")
 
         daily = (
@@ -205,14 +200,12 @@ class YabooPOSPreprocessor:
             .reset_index()
         )
 
-        # Konversi ke satuan pembelian gudang (Kg & Liter)
         daily["kopi_kg"] = (daily["kopi_gr"] / 1000.0).round(3)
         daily["susu_liter"] = (daily["susu_ml"] / 1000.0).round(3)
         daily["krimer_kg"] = (daily["krimer_gr"] / 1000.0).round(3)
         daily["powder_aren_kg"] = (daily["powder_aren_gr"] / 1000.0).round(3)
         daily["sirup_liter"] = (daily["sirup_ml"] / 1000.0).round(3)
 
-        # Fitur kalender & lag dasar
         daily["hari_ke"] = daily["tanggal"].dt.day_of_week
         daily["is_weekend"] = (daily["hari_ke"] >= 4).astype(int)
 
